@@ -524,7 +524,7 @@
 					"version": "0.0.8",
 					"url": "http://volumio.github.io/volumio-plugins/plugins/volumio/armhf/user_interface/raspdac/raspdac.zip",
 					"license": "MIT",
-					"description": "n",
+					"description": "Provide Audiophonics Raspdac power button and OLED configuration",
 					"details": "Provide Audiophonics Raspdac power button and OLED configuration",
 					"author": "JedS",
 					"screenshots": [
