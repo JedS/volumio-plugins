@@ -18,12 +18,14 @@ function ControllerRaspDac(context) {
       self.context = context;
       self.commandRouter = this.context.coreCommand;
       self.logger = this.context.logger;
+      // Set LCD
+      self.raspdacDisplay = undefined;
 }
 
 ControllerRaspDac.prototype.onVolumioStart = function()
 {
       var self = this;
-      self.logger.info("RaspDac initialized");
+      self.logger.info("Raspdac initialized");      
 
       return libQ.resolve();
 }
@@ -31,8 +33,13 @@ ControllerRaspDac.prototype.onVolumioStart = function()
 ControllerRaspDac.prototype.onVolumioReboot = function()
 {
       var self = this;
-      self.raspdacDisplay.close();
-      self.softShutdown.writeSync(1);
+      self.logger.info('Raspdac : Volumio reboot called');
+
+      self._closeDisplay();
+      
+      setTimeout(function() { 
+            self.softShutdown.writeSync(1);
+            self.bootOk.writeSync(1); } , 2000);  
 
       return libQ.resolve();
 }
@@ -42,14 +49,17 @@ ControllerRaspDac.prototype.onVolumioShutdown = function()
       var self = this;
       var defer = libQ.defer();
       
-      self.raspdacDisplay.close();
+      self.logger.info('Raspdac : Volumio shutdown called');
+
+      self._closeDisplay();
+
       self.softShutdown.writeSync(1);
       setTimeout(function(){
             self.softShutdown.writeSync(0);
             defer.resolve();
           }, 1000);
-      
-      return defer;
+      self.bootOk.writeSync(0);
+      return defer.promise;
 }
 
 ControllerRaspDac.prototype.getConfigurationFiles = function()
@@ -62,8 +72,8 @@ ControllerRaspDac.prototype.onStart = function() {
       var self = this;
 
       self.configFile = self.commandRouter.pluginManager.getConfigurationFile(self.context, 'config.json');
-      self.config = new (require('v-conf'))()
-      self.config.loadFile(self.configFile)
+      self.config = new (require('v-conf'))();
+      self.config.loadFile(self.configFile);
 
       // Set Button GPIO
       //self.softShutdown = new Gpio(4, 'out');
@@ -90,29 +100,45 @@ ControllerRaspDac.prototype.onStart = function() {
 
       self.shutdownButton.watch(self.hardShutdownRequest.bind(this));
 
-      // Set LCD
       self.raspdacDisplay = new raspdacDisplay(self.context);
 
       //self.applyConf(self.getConf());
-      self.logger.info("RaspDac started");
+      self.logger.info("RaspDac started... OK");
 
       return libQ.resolve();
 };
 
 ControllerRaspDac.prototype.onStop = function() {
       var self = this;
+
+      self.logger.info('Stopping Raspdac plugin...');
+
+      self.logger.info('Releasing Raspdac LDC...');
+      self._closeDisplay();      
+      self.logger.info('Releasing Raspdac LDC...OK');
+
       self.shutdownButton.unwatchAll();
       self.shutdownButton.unexport();
       self.bootOk.unexport();
       self.softShutdown.unexport();
 
-      self.raspdacDisplay.close();
       
+      
+      self.logger.info('Stopping Raspdac plugin ...OK');
       return libQ.resolve();
 };
 
 ControllerRaspDac.prototype.onRestart = function() {
       var self = this;
+
+      self.logger.info('Restarting Raspdac...');
+      self.logger.info('Releasing Raspdac LDC...');
+      self._closeDisplay();      
+      self.logger.info('Releasing Raspdac LDC...OK');
+
+      self.logger.info('Restarting Raspdac... OK');
+
+      return libQ.resolve();
 };
 
 ControllerRaspDac.prototype.getConf = function(varName) {
@@ -217,3 +243,19 @@ ControllerRaspDac.prototype.hardShutdownRequest = function(err, value) {
       // ...after which the power will be cut a few seconds later by the hardware
       self.commandRouter.shutdown();
 };
+
+// Private Methods
+ControllerRaspDac.prototype._closeDisplay = function() 
+{
+      var self = this;
+      self.logger.info('------------------- Rasdac : _closeDisplay called');
+      if (self.raspdacDisplay !== undefined) {
+            self.logger.info('------------------- Rasdac : cleaning  display');
+            self.raspdacDisplay.endOfSong(function(err) {
+                  self.raspdacDisplay.close();
+                  self.raspdacDisplay = undefined;   
+            });
+      }
+      else
+            self.logger.info('------------------- Rasdac : display already clean');
+}

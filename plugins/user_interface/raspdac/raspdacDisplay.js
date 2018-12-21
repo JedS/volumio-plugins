@@ -33,28 +33,26 @@ function raspdacDisplay(context) {
 	self.displayTimer = undefined;
 	self.currentState = undefined;
 	self.elapsed = 0;
+	self.lock = false;
+	self.isInit = false;
+	self.artistIndex = 0;
+	self.closeRequested = false;
 
 	self.context = context;
   	self.logger = self.context.logger;
+  	self.logger.info("Raspdac initializing LCD");
 
 	self.lcd = new Lcd({rs: 7, e: 8, data: [25, 24, 23, 27], cols: 16, rows: 2});
 
-	self.lcd.on('ready', function () {
-		self.lcd.setCursor(0, 0);
-        self.lcd.print("   Welcome to   ", function (err) {
-	        if (err) {
-	           self.logger.error(err)
-	        }
-        });
-        self.lcd.setCursor(0, 1);
-        self.lcd.print("    Volumio    ", function (err) {
-	        if (err) {
-	           self.logger.error(err)
-	        }
-        });
-		setTimeout( function () {
-			self.lcd.clear();
-		}, 3000);
+	self.lcd.on('ready', function() {
+		self.isInit = true;		
+		self.clear(function(err) {
+			if (err) {
+				self.logger.error(err);
+			}
+			self.logger.info("Raspdac LCD initialization ... OK");
+			self.pushState(self.context.coreCommand.volumioGetState());	
+			});		
 	});
 };
 
@@ -64,15 +62,17 @@ raspdacDisplay.prototype.pushState = function(state)  {
 	self.elapsed = state.seek;
 	if (state.status === 'play') {		
 		if (self._needStartDisplayInfo(state)) {
-			clearTimeout(self.displayTimer);
-			self.lcd.clear();
-			self.displayInfo(state, 0);
+			self.endOfSong(function(err) {
+				if (err) {
+					self.logger.error(err);
+				}
+				self.displayInfo(state, 0);
+			});
 		}
 	}
 	else if (state.status === 'stop') {
 		self.elapsed = 0;
-		clearTimeout(self.displayTimer);
-		self.lcd.clear();
+		self.endOfSong();
 	}
 	else if (state.status === 'pause') {
 		self.elapsed = state.seek;
@@ -82,72 +82,105 @@ raspdacDisplay.prototype.pushState = function(state)  {
 
 raspdacDisplay.prototype.close = function() {
 	var self = this;
-	if (self.displayTimer !== undefined) {
-		clearTimeout(self.displayTimer);
+	if (!self.closeRequested) {
+		self.closeRequested = true;
+		if (self.displayTimer !== undefined) {
+			clearInterval(self.displayTimer);
+			self.displayTimer = undefined;
+		}
+		setTimeout( function () {
+			if (self.lcd !== undefined)
+			{
+				self.lcd.close();
+				self.lcd = undefined;
+			}
+		}, ANIMATION_SPEED + 10);
 	}
-	self.lcd.close();
+};
+
+raspdacDisplay.prototype.clear = function(cb) {
+	var self = this;
+	if (self.isInit && self.lcd !== undefined) {
+		self.lcd.clear(cb);
+	}
 };
 
 
-raspdacDisplay.prototype.stopDisplayDuration = function() {
+raspdacDisplay.prototype.endOfSong = function(cb) {
 	var self = this;
+
 	if (self.displayTimer !== undefined) {
-		clearTimeout(self.displayTimer);
+		clearInterval(self.displayTimer);
 		self.displayTimer = undefined;
 	}
-	self.lcd.clear();
+	self.artistIndex = 0;	
+	self.clear(cb);
 }
 
-raspdacDisplay.prototype.endOfSong = function() {
+raspdacDisplay.prototype.displayInfo = function(data) {
 	var self = this;
+	if (!self.lock && self.isInit) {
+		self.lock = true;
+	 	var duration = data.duration;
 
-	if (self.displayTimer !== undefined) {
-		clearTimeout(self.displayTimer);
-		self.displayTimer = undefined;
-	}	
-	self.lcd.clear();
-}
+		if (self.elapsed >= duration * 1000) {
+			self.endOfSong();
+		}
+		else {
+		    //self.lcd.clear();
+		    // Display artist info
+		    var artistInfo = data.artist + '-' + data.title;
+		    var buff = artistInfo;
+		    if (buff.length > DISPLAY_WIDTH) {
+		    	buff = artistInfo + '          ' + artistInfo.substr(0, DISPLAY_WIDTH);
+		    }
+		    else {
+		    	buff = buff + (' ').repeat(DISPLAY_WIDTH-buff.length);
+		    	buff = buff.substr(0, DISPLAY_WIDTH);
+		    }
 
-raspdacDisplay.prototype.displayInfo = function(data, index) {
-	var self = this;
-
- 	var duration = data.duration;
-
-	if (self.elapsed >= duration * 1000) {
-		self.endOfSong();
+		    if (self.artistIndex >= buff.length - DISPLAY_WIDTH) {
+		    	self.artistIndex = 0;
+		    }
+		    if (self.lcd !== undefined)
+			{
+			    self._print(buff.substr(self.artistIndex, DISPLAY_WIDTH), 0, 0, function(err) {
+			    	if (err) {
+			    		self.logger.error(err);
+			    	}  
+			  	    // Display duration
+			  	    self._print(self._formatDuration(self.elapsed,duration), 1, 0, function(err) {
+			  	    	if (self.displayTimer === undefined)
+			  	    	{
+				  	    	self.displayTimer = setInterval( function () {
+				  	    		if (self.currentState.status != 'pause') {
+				  	    			self.elapsed += ANIMATION_SPEED;				  	    			
+				  	    		}				  	    		
+				  	    		self.displayInfo(data);
+				  	    	}, ANIMATION_SPEED);
+			  	    	}
+			  	    	self.artistIndex += 1;
+			  	    });
+			  	});
+			}
+		}
+		self.lock = false;
 	}
 	else {
-	    //self.lcd.clear();
-	    // Display artist info
-	    var artistInfo = data.artist + '-' + data.title;
-	    var buff = artistInfo;
-	    if (buff.length > DISPLAY_WIDTH) {
-	    	buff = artistInfo + '          ' + artistInfo.substr(0, DISPLAY_WIDTH);
-	    }
-	    else {
-	    	buff = buff + (' ').repeat(DISPLAY_WIDTH-buff.length);
-	    	buff = buff.substr(0, DISPLAY_WIDTH);
-	    }
-
-	    if (index >= buff.length - DISPLAY_WIDTH) {
-	    	index = 0;
-	    }
-	    self.lcd.setCursor(0,0);
-	    self.lcd.print(buff.substr(index, DISPLAY_WIDTH), function() {  
-	  	    // Display duration
-	  	    self.lcd.setCursor(0,1);
-	  	    self.lcd.print(self._formatDuration(self.elapsed,duration), function() {
-	  	    	self.displayTimer = setTimeout( function () {
-	  	    		if (self.currentState.status != 'pause')
-	  	    			self.elapsed += ANIMATION_SPEED;
-	  	    		self.displayInfo(data, index + 1);
-	  	    	}, ANIMATION_SPEED);
-	  	    });
-	  	});
+		self.logger.info('Raspdac : display info locked... skipped');
 	}
 }
 
 // private
+raspdacDisplay.prototype._print  = function(str, line, column, cb) {
+	var self = this;
+	if (self.isInit && (self.lcd !== undefined)) {
+		self.lcd.setCursor(column, line);
+		self.lcd.print(str, cb);
+	}
+}
+
+//private
 raspdacDisplay.prototype._formatDuration = function(seek, duration) {
   var self = this;
   var seek_sec = Math.ceil(seek / 1000).toFixed(0);
@@ -166,17 +199,10 @@ raspdacDisplay.prototype._formatDuration = function(seek, duration) {
 }
 
 //private
-raspdacDisplay.prototype._displayRunning = function(state) {
-  var self = this;
-  return (typeof(self.currentState) === 'undefined' ||
-          self.currentState.artist !== state.artist || 
-  	  	  self.currentState.title !== state.title);
-}
-
-//private
 raspdacDisplay.prototype._needStartDisplayInfo = function(state) {
   var self = this;
-  return  ((state.status === 'play' && self.currentState.status === 'stop') ||
+  return  (typeof(self.currentState) === 'undefined' ||
+  		  (state.status === 'play' && self.currentState.status === 'stop') ||
           self.currentState.artist !== state.artist || 
   	  	  self.currentState.title !== state.title);
 }
