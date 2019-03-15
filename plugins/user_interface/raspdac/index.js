@@ -19,7 +19,7 @@ function ControllerRaspDac(context) {
       self.commandRouter = this.context.coreCommand;
       self.logger = this.context.logger;
       // Set LCD
-      self.raspdacDisplay = undefined;
+      self.raspdacDisplay = null;
 }
 
 ControllerRaspDac.prototype.onVolumioStart = function()
@@ -33,15 +33,19 @@ ControllerRaspDac.prototype.onVolumioStart = function()
 ControllerRaspDac.prototype.onVolumioReboot = function()
 {
       var self = this;
+      var defer = libQ.defer();
       self.logger.info('Raspdac : Volumio reboot called');
 
-      self._closeDisplay();
-      
-      setTimeout(function() { 
-            self.softShutdown.writeSync(1);
-            self.bootOk.writeSync(1); } , 2000);  
+      self._closeDisplay()
+      .then( function() {
+            setTimeout(function() { 
+                  self.softShutdown.writeSync(1);
+                  self.bootOk.writeSync(1); 
+                  defer.resolve();
+            } , 2000);  
+      });
 
-      return libQ.resolve();
+      return defer.promise;
 }
 
 ControllerRaspDac.prototype.onVolumioShutdown = function()
@@ -51,14 +55,17 @@ ControllerRaspDac.prototype.onVolumioShutdown = function()
       
       self.logger.info('Raspdac : Volumio shutdown called');
 
-      self._closeDisplay();
-
-      self.softShutdown.writeSync(1);
-      setTimeout(function(){
-            self.softShutdown.writeSync(0);
-            defer.resolve();
-          }, 1000);
-      self.bootOk.writeSync(0);
+      self._closeDisplay()
+      . then( function() {
+            self.softShutdown.writeSync(1);
+            setTimeout(function() 
+            {
+                  self.softShutdown.writeSync(0);
+                  defer.resolve();
+            }, 1000);
+            self.bootOk.writeSync(0);
+      });
+      
       return defer.promise;
 }
 
@@ -70,6 +77,8 @@ ControllerRaspDac.prototype.getConfigurationFiles = function()
 // Plugin methods -----------------------------------------------------------------------------
 ControllerRaspDac.prototype.onStart = function() {
       var self = this;
+
+      var defer = libQ.defer();
 
       self.configFile = self.commandRouter.pluginManager.getConfigurationFile(self.context, 'config.json');
       self.config = new (require('v-conf'))();
@@ -101,44 +110,52 @@ ControllerRaspDac.prototype.onStart = function() {
       self.shutdownButton.watch(self.hardShutdownRequest.bind(this));
 
       self.raspdacDisplay = new raspdacDisplay(self.context);
+      self.raspdacDisplay.initDisplay()
+      .then( function()
+      {
+            //self.applyConf(self.getConf());
+            self.logger.info("RaspDac started... OK");
+            self.raspdacDisplay.pushState(self.context.coreCommand.volumioGetState());
+            defer.resolve();
+      });
 
-      //self.applyConf(self.getConf());
-      self.logger.info("RaspDac started... OK");
-
-      return libQ.resolve();
+      return defer.promise;
 };
 
 ControllerRaspDac.prototype.onStop = function() {
       var self = this;
+      var defer = libQ.defer();  
 
       self.logger.info('Stopping Raspdac plugin...');
 
       self.logger.info('Releasing Raspdac LDC...');
-      self._closeDisplay();      
-      self.logger.info('Releasing Raspdac LDC...OK');
+      self._closeDisplay()
+      .then( function() {
+            self.logger.info('Releasing Raspdac LDC...OK');
 
-      self.shutdownButton.unwatchAll();
-      self.shutdownButton.unexport();
-      self.bootOk.unexport();
-      self.softShutdown.unexport();
+            self.shutdownButton.unwatchAll();
+            self.shutdownButton.unexport();
+            self.bootOk.unexport();
+            self.softShutdown.unexport();            
+            
+            self.logger.info('Stopping Raspdac plugin ...OK'); 
+            defer.resolve();          
+      });      
 
-      
-      
-      self.logger.info('Stopping Raspdac plugin ...OK');
-      return libQ.resolve();
+     return defer.promise;
 };
 
 ControllerRaspDac.prototype.onRestart = function() {
       var self = this;
+      var defer = libQ.defer();
 
       self.logger.info('Restarting Raspdac...');
       self.logger.info('Releasing Raspdac LDC...');
-      self._closeDisplay();      
-      self.logger.info('Releasing Raspdac LDC...OK');
-
-      self.logger.info('Restarting Raspdac... OK');
-
-      return libQ.resolve();
+      self._closeDisplay()
+      .then(function() {
+            defer.resolve(); 
+      });
+      return defer.promise;
 };
 
 ControllerRaspDac.prototype.getConf = function(varName) {
@@ -248,14 +265,16 @@ ControllerRaspDac.prototype.hardShutdownRequest = function(err, value) {
 ControllerRaspDac.prototype._closeDisplay = function() 
 {
       var self = this;
-      self.logger.info('------------------- Rasdac : _closeDisplay called');
-      if (self.raspdacDisplay !== undefined) {
-            self.logger.info('------------------- Rasdac : cleaning  display');
+      var defer = libQ.defer();
+      if (self.raspdacDisplay) {
             self.raspdacDisplay.endOfSong(function(err) {
                   self.raspdacDisplay.close();
-                  self.raspdacDisplay = undefined;   
+                  self.raspdacDisplay = null;
+                  defer.resolve();   
             });
       }
       else
             self.logger.info('------------------- Rasdac : display already clean');
+
+      return defer.promise;
 }

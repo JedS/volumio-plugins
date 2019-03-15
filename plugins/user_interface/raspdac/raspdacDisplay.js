@@ -10,7 +10,7 @@ var DISPLAY_HEIGHT = 2;
 var ANIMATION_SPEED = 500; // in milliseconds
 
 var Lcd = require('lcd');
-var Q = require('q');
+var libQ = require('kew');
 
 if (!String.prototype.padEnd) {
   String.prototype.padEnd = function (count, str) {
@@ -30,8 +30,8 @@ module.exports = raspdacDisplay;
 function raspdacDisplay(context) {
 	var self = this;
 
-	self.displayTimer = undefined;
-	self.currentState = undefined;
+	self.displayTimer = null;
+	self.currentState = null;
 	self.elapsed = 0;
 	self.lock = false;
 	self.isInit = false;
@@ -40,39 +40,49 @@ function raspdacDisplay(context) {
 
 	self.context = context;
   	self.logger = self.context.logger;
+};
+
+
+raspdacDisplay.prototype.initDisplay = function() {
+	var self = this;
+	var defer = libQ.defer();
   	self.logger.info("Raspdac initializing LCD");
 
 	self.lcd = new Lcd({rs: 7, e: 8, data: [25, 24, 23, 27], cols: 16, rows: 2});
 
-	self.lcd.on('ready', function() {
+	self.lcd.on('ready', function() 
+	{
 		self.isInit = true;		
-		self.clear(function(err) {
-			if (err) {
+		self.clear(function(err) 
+		{
+			if (err) 
+			{
 				self.logger.error(err);
 			}
-			self.logger.info("Raspdac LCD initialization ... OK");
-			self.pushState(self.context.coreCommand.volumioGetState());	
-			});		
+			self.logger.info("Raspdac LCD initialization ... OK");				
+			defer.resolve();
+		});				
 	});
-};
 
+	return defer.promise;
+}
 
 raspdacDisplay.prototype.pushState = function(state)  {
 	var self = this;
 	self.elapsed = state.seek;
-	if (state.status === 'play') {		
-		if (self._needStartDisplayInfo(state)) {
-			self.endOfSong(function(err) {
-				if (err) {
-					self.logger.error(err);
-				}
-				self.displayInfo(state, 0);
-			});
-		}
-	}
-	else if (state.status === 'stop') {
+	self.logger.info("RASPDAC Pushstate : status = " + state.status);
+	if (state.status === 'stop') {
 		self.elapsed = 0;
 		self.endOfSong();
+	}
+	else if (self._needStartDisplayInfo(state)) {
+		self.endOfSong(function(err) 
+		{
+			if (err) {
+				self.logger.error(err);
+			}
+			self.displayInfo(state);
+		});
 	}
 	else if (state.status === 'pause') {
 		self.elapsed = state.seek;
@@ -84,23 +94,24 @@ raspdacDisplay.prototype.close = function() {
 	var self = this;
 	if (!self.closeRequested) {
 		self.closeRequested = true;
-		if (self.displayTimer !== undefined) {
+		if (self.displayTimer) {
 			clearInterval(self.displayTimer);
-			self.displayTimer = undefined;
+			self.logger.info("RASPDAC stopping timer... OK");
+			self.displayTimer = null;
 		}
-		setTimeout( function () {
-			if (self.lcd !== undefined)
-			{
-				self.lcd.close();
-				self.lcd = undefined;
-			}
-		}, ANIMATION_SPEED + 10);
+		else
+			self.logger.error('RASPDAC : displaytimer not defined');
+		self.logger.info('RASPDAC : Calling lcd.close()');
+		self.lcd.close();
+		self.logger.info('RASPDAC : lcd.close() done');
+		self.lcd = null;		
 	}
 };
 
 raspdacDisplay.prototype.clear = function(cb) {
 	var self = this;
-	if (self.isInit && self.lcd !== undefined) {
+	if (self.isInit && self.lcd) {
+		self.logger.info('RASPDAC : Calling lcd.clear()');
 		self.lcd.clear(cb);
 	}
 };
@@ -109,11 +120,14 @@ raspdacDisplay.prototype.clear = function(cb) {
 raspdacDisplay.prototype.endOfSong = function(cb) {
 	var self = this;
 
-	if (self.displayTimer !== undefined) {
+	if (self.displayTimer) {
 		clearInterval(self.displayTimer);
-		self.displayTimer = undefined;
+		self.logger.info("RASPDAC stopping timer... OK");
+		self.displayTimer = null;
 	}
-	self.artistIndex = 0;	
+	self.artistIndex = 0;
+	if (self.currentState)
+		self.currentState.status = 'stop';	
 	self.clear(cb);
 }
 
@@ -142,7 +156,7 @@ raspdacDisplay.prototype.displayInfo = function(data) {
 		    if (self.artistIndex >= buff.length - DISPLAY_WIDTH) {
 		    	self.artistIndex = 0;
 		    }
-		    if (self.lcd !== undefined)
+		    if (self.lcd)
 			{
 			    self._print(buff.substr(self.artistIndex, DISPLAY_WIDTH), 0, 0, function(err) {
 			    	if (err) {
@@ -150,8 +164,9 @@ raspdacDisplay.prototype.displayInfo = function(data) {
 			    	}  
 			  	    // Display duration
 			  	    self._print(self._formatDuration(self.elapsed,duration), 1, 0, function(err) {
-			  	    	if (self.displayTimer === undefined)
+			  	    	if (!self.displayTimer)
 			  	    	{
+			  	    		self.logger.info("RASPDAC starting timer... OK");
 				  	    	self.displayTimer = setInterval( function () {
 				  	    		if (self.currentState.status != 'pause') {
 				  	    			self.elapsed += ANIMATION_SPEED;				  	    			
@@ -162,7 +177,7 @@ raspdacDisplay.prototype.displayInfo = function(data) {
 			  	    	self.artistIndex += 1;
 			  	    });
 			  	});
-			}
+			}			
 		}
 		self.lock = false;
 	}
@@ -174,7 +189,7 @@ raspdacDisplay.prototype.displayInfo = function(data) {
 // private
 raspdacDisplay.prototype._print  = function(str, line, column, cb) {
 	var self = this;
-	if (self.isInit && (self.lcd !== undefined)) {
+	if (self.isInit && (self.lcd)) {
 		self.lcd.setCursor(column, line);
 		self.lcd.print(str, cb);
 	}
@@ -201,8 +216,8 @@ raspdacDisplay.prototype._formatDuration = function(seek, duration) {
 //private
 raspdacDisplay.prototype._needStartDisplayInfo = function(state) {
   var self = this;
-  return  (typeof(self.currentState) === 'undefined' ||
-  		  (state.status === 'play' && self.currentState.status === 'stop') ||
+  return  (!self.currentState ||
+  		  ((state.status === 'play' || state.status === 'pause') && self.currentState.status === 'stop') ||
           self.currentState.artist !== state.artist || 
   	  	  self.currentState.title !== state.title);
 }
